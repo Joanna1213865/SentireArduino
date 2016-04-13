@@ -11,6 +11,7 @@
 #ifndef _VSARDUINO_H_
 #define _VSARDUINO_H_
 #define __BIN_I686__
+#define _VMDEBUG 1
 #define __ARDUINO_X86__
 #define ARDUINO 10607
 #define __cplusplus 201103L
@@ -98,4 +99,8 @@ extern "C" void __cxa_pure_virtual() {;}
 #define portInputRegister(P)
 #define portModeRegister(P)
 #include <..\SentireArduino\SentireArduino.ino>
+#include <..\SentireArduino\Pattern.cpp>
+#include <..\SentireArduino\Pattern.h>
+#include <..\SentireArduino\myUtils.cpp>
+#include <..\SentireArduino\myUtils.h>
 #endif
