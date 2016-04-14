@@ -6,17 +6,12 @@
 
 // the setup function runs once when you press reset or power the board
 #include <SD.h>
-#include <Adafruit_DRV2605.h>
-#include <WiFiUdp.h>
-#include <WiFiServer.h>
 #include <WiFiClient.h>
-#include <WiFi.h>
-#include <Dns.h>
-#include <Dhcp.h>
 #include <SPI.h>
 #include <Intel_Edison_BT_SPP.h>
 #include <ArduinoJson.h>
 #include <SSD1331.h>
+#include <Adafruit_DRV2605.h>
 #include <ADXL345.h>
 #include <iostream>
 #include <vector>
@@ -53,7 +48,6 @@ const char* server = "songerarduinotest.azure-mobile.net";
 const char* ams_key = "IBmOdZkslBSsjrCkJeQNvpjHOpTQYr42";
 const char* table_names[2] = { "vibrationpattern", "lightpattern" };
 const char* emotion_types[6] = { "happy", "fearful", "surprised", "sad", "disgusted", "angry" };
-const char* modes[2] = { "standard", "testing" };
 char* offline_file_name = "offline_patterns.txt";
 int decision = -1;
 char buffer[2048];
@@ -99,6 +93,258 @@ void setup() {
 // the loop function runs over and over again until power down or reset
 void loop() {
 	stateMachine();
+}
+
+void stateMachine() {
+	switch (mode) {
+	case STANDARD_MODE:
+		standardMode();
+		break;
+	case TESTING_MODE:
+		testingMode();
+		break;
+	}
+}
+
+void standardMode() {
+	ssize_t size = spp.read();
+
+	if (((size != -1) && (size != 0)) || replay) {
+		adxl.setInterrupt(ADXL345_INT_SINGLE_TAP_BIT, 0);
+		adxl.setInterrupt(ADXL345_INT_DOUBLE_TAP_BIT, 0);
+		if (!replay) {
+			const char* buf = spp.getBuf();
+			Serial.println(buf);
+			if (*(buf + 1) != ':') {
+				decision = atoi(buf);
+				if (decision >= 0 && decision < 6)
+					parseDecision(decision);
+			}
+		}
+		else {
+			if (decision >= 0 && decision < 6)
+				parseDecision(decision);
+			replay = false;
+		}
+
+		adxl.setInterrupt(ADXL345_INT_SINGLE_TAP_BIT, 1);
+		adxl.setInterrupt(ADXL345_INT_DOUBLE_TAP_BIT, 1);
+	}
+
+	gestureStateMachineInStandardMode();
+}
+
+void gestureStateMachineInStandardMode() {
+	Serial.print("Gesture state: "); Serial.println(gesture_state);
+
+	switch (gesture_state) {
+	case 0:
+		adxl.getAcceleration(rawxyz);
+		xyz[0][0] = thresholding(rawxyz[0], 128);
+		xyz[0][1] = thresholding(rawxyz[1], 128);
+		xyz[0][2] = thresholding(rawxyz[2], 128);
+		interrupts = adxl.getInterruptSource();
+		if (adxl.triggered(interrupts, ADXL345_DOUBLE_TAP)) {
+			double_tap_counter += 1;
+			timestamp = millis();
+			gesture_state = 2;
+		}
+		else if (adxl.triggered(interrupts, ADXL345_SINGLE_TAP)) {
+			gesture_state = 0;
+			Serial.println("Single tap");
+			sprintf(buffer, ":)");
+			Serial.println(buffer);
+			Serial.println();
+			oled.clearScreen();
+			oled.drawString(buffer, 0, 0, 2, COLOR_WHITE);
+			delay(1000);
+			oled.clearScreen();
+			if (decision >= 0 && decision < 6)
+				updatePatternScore(emotion_types[decision], true);
+		}
+		else {
+			gesture_state = 1;
+			timestamp = millis();
+		}
+
+		break;
+	case 1:
+		adxl.getAcceleration(rawxyz);
+		xyz[1][0] = thresholding(rawxyz[0], 128);
+		xyz[1][1] = thresholding(rawxyz[1], 128);
+		xyz[1][2] = thresholding(rawxyz[2], 128);
+		interrupts = adxl.getInterruptSource();
+		if ((xyz[0][0] ^ xyz[1][0]) || (xyz[0][1] ^ xyz[1][1])) {
+			gesture_state = 3;
+		}
+		else if (adxl.triggered(interrupts, ADXL345_DOUBLE_TAP)) {
+			double_tap_counter += 1;
+			timestamp = millis();
+			gesture_state = 2;
+		}
+		else if (adxl.triggered(interrupts, ADXL345_SINGLE_TAP)) {
+			gesture_state = 0;
+			Serial.println("Single tap");
+			sprintf(buffer, ":)");
+			Serial.println(buffer);
+			Serial.println();
+			oled.clearScreen();
+			oled.drawString(buffer, 0, 0, 2, COLOR_WHITE);
+			delay(1000);
+			oled.clearScreen();
+			if (decision >= 0 && decision < 6)
+				updatePatternScore(emotion_types[decision], true);
+		}
+		else {
+			gesture_state = 0;
+		}
+		break;
+	case 2:
+		interrupts = adxl.getInterruptSource();
+		if (adxl.triggered(interrupts, ADXL345_DOUBLE_TAP) && ((millis() - timestamp) < 2500)) {
+			Serial.println("Double tap twice");
+			gesture_state = 0;
+			double_tap_counter = 0;
+			sprintf(buffer, "Testing");
+			Serial.println(buffer);
+			Serial.println();
+			oled.clearScreen();
+			oled.drawString(buffer, 0, 0, 2, COLOR_WHITE);
+			delay(1000);
+			oled.clearScreen();
+			mode = TESTING_MODE;
+		}
+		else if ((millis() - timestamp) >= 2050) {
+			Serial.println("Double tap once");
+			gesture_state = 0;
+			double_tap_counter = 0;
+			sprintf(buffer, ":(");
+			Serial.println(buffer);
+			Serial.println();
+			oled.clearScreen();
+			oled.drawString(buffer, 0, 0, 2, COLOR_WHITE);
+			delay(1000);
+			oled.clearScreen();
+			if (decision >= 0 && decision < 6)
+				updatePatternScore(emotion_types[decision], false);
+		}
+		break;
+	case 3:
+		shake_counter = 0;
+		while (shake_counter < 3 && millis() - timestamp < 1500) {
+			//Serial.println(shake_counter);
+			adxl.getAcceleration(rawxyz);
+			xyz[0][0] = thresholding(rawxyz[0], 128);
+			xyz[0][1] = thresholding(rawxyz[1], 128);
+			xyz[0][2] = thresholding(rawxyz[2], 128);
+			delay(100);
+			adxl.getAcceleration(rawxyz);
+			xyz[1][0] = thresholding(rawxyz[0], 128);
+			xyz[1][1] = thresholding(rawxyz[1], 128);
+			xyz[1][2] = thresholding(rawxyz[2], 128);
+			delay(100);
+			if ((xyz[0][0] ^ xyz[1][0]) || (xyz[0][1] ^ xyz[1][1])) {
+				shake_counter += 1;
+			}
+		}
+		if (shake_counter >= 3) {
+			if (decision >= 0 && decision < 6)
+				replay = true;
+			Serial.println("Shaking");
+		}
+		gesture_state = 0;
+		shake_counter = 0;
+		break;
+	}
+
+	delay(500);
+}
+
+int thresholding(double input, double threshold) {
+	if (input > threshold) {
+		return 1;
+	}
+	else {
+		return 0;
+	}
+}
+
+void testingMode() {
+	ssize_t size = spp.read();
+
+	if ((size != -1) && (size != 0)) {
+		adxl.setInterrupt(ADXL345_INT_SINGLE_TAP_BIT, 0);
+		adxl.setInterrupt(ADXL345_INT_DOUBLE_TAP_BIT, 0);
+		const char* buf = spp.getBuf();
+		Serial.println(buf);
+		parsePattern(buf, "");
+		delay(4000);
+
+		adxl.setInterrupt(ADXL345_INT_SINGLE_TAP_BIT, 1);
+		adxl.setInterrupt(ADXL345_INT_DOUBLE_TAP_BIT, 1);
+	}
+
+	gestureStateMachineInTestingMode();
+}
+
+void gestureStateMachineInTestingMode() {
+	switch (gesture_state) {
+	case 0:
+		interrupts = adxl.getInterruptSource();
+		if (adxl.triggered(interrupts, ADXL345_DOUBLE_TAP)) {
+			double_tap_counter += 1;
+			timestamp = millis();
+			gesture_state = 1;
+		}
+		else if (adxl.triggered(interrupts, ADXL345_SINGLE_TAP)) {
+			Serial.println("Single tap");
+			gesture_state = 0;
+			//const char* str = "1";
+			//spp.write(str);
+			sprintf(buffer, ":)");
+			Serial.println(buffer);
+			Serial.println();
+			oled.clearScreen();
+			oled.drawString(buffer, 0, 0, 2, COLOR_WHITE);
+			delay(1000);
+			oled.clearScreen();
+		}
+		break;
+	case 1:
+		interrupts = adxl.getInterruptSource();
+		if (adxl.triggered(interrupts, ADXL345_DOUBLE_TAP) && ((millis() - timestamp) < 2000)) {
+			Serial.println("Double tap twice");
+			gesture_state = 0;
+			double_tap_counter = 0;
+			sprintf(buffer, "Standard");
+			Serial.println(buffer);
+			Serial.println();
+			oled.clearScreen();
+			oled.drawString(buffer, 0, 0, 2, COLOR_WHITE);
+			delay(1000);
+			oled.clearScreen();
+			refreshAllPatternsFromCloud();
+			mode = STANDARD_MODE;
+		}
+		else if ((millis() - timestamp) >= 2000) {
+			Serial.println("Double tap once");
+			gesture_state = 0;
+			double_tap_counter = 0;
+			//const char* str = "0";
+			//spp.write(str);
+			sprintf(buffer, ":(");
+			Serial.println(buffer);
+			Serial.println();
+			oled.clearScreen();
+			oled.drawString(buffer, 0, 0, 2, COLOR_WHITE);
+			delay(1000);
+			oled.clearScreen();
+		}
+		break;
+	}
+
+	// wait a bit
+	delay(500);
 }
 
 void refreshAllPatternsFromLocalStore() {
@@ -200,240 +446,6 @@ void refreshLocalStore() {
 	offlineFile.close();
 }
 
-void stateMachine() {
-	switch (mode) {
-	case STANDARD_MODE:
-		standardMode();
-		break;
-	case TESTING_MODE:
-		testingMode();
-		break;
-	}
-}
-
-void standardMode() {
-	ssize_t size = spp.read();
-
-	if (size != -1 || replay) {
-		adxl.setInterrupt(ADXL345_INT_SINGLE_TAP_BIT, 0);
-		adxl.setInterrupt(ADXL345_INT_DOUBLE_TAP_BIT, 0);
-		if (!replay) {
-			const char* buf = spp.getBuf();
-			if (*(buf + 1) != ':') {
-				decision = atoi(buf);
-				if (decision >= 0 && decision < 6)
-					parseDecision(decision);
-			}
-		}
-		else {
-			if (decision >= 0 && decision < 6)
-				parseDecision(decision);
-			replay = false;
-		}
-
-		adxl.setInterrupt(ADXL345_INT_SINGLE_TAP_BIT, 1);
-		adxl.setInterrupt(ADXL345_INT_DOUBLE_TAP_BIT, 1);
-	}
-
-	gestureStateMachineInStandardMode();
-}
-
-void gestureStateMachineInStandardMode() {
-	Serial.println(gesture_state);
-
-	switch (gesture_state) {
-	case 0:
-		adxl.getAcceleration(rawxyz);
-		xyz[0][0] = thresholding(rawxyz[0], 128);
-		xyz[0][1] = thresholding(rawxyz[1], 128);
-		xyz[0][2] = thresholding(rawxyz[2], 128);
-		interrupts = adxl.getInterruptSource();
-		if (adxl.triggered(interrupts, ADXL345_DOUBLE_TAP)) {
-			double_tap_counter += 1;
-			timestamp = millis();
-			gesture_state = 2;
-		}
-		else if (adxl.triggered(interrupts, ADXL345_SINGLE_TAP)) {
-			gesture_state = 0;
-			Serial.println("Single tap");
-			sprintf(buffer, ":)");
-			Serial.println(buffer);
-			Serial.println();
-			oled.clearScreen();
-			oled.drawString(buffer, 0, 0, 2, COLOR_WHITE);
-			delay(1000);
-			oled.clearScreen();
-			Serial.println(decision);
-			if (decision >= 0 && decision < 6)
-				updatePatternScore(emotion_types[decision], true);
-		}
-		else {
-			gesture_state = 1;
-			timestamp = millis();
-		}
-
-		break;
-	case 1:
-		adxl.getAcceleration(rawxyz);
-		xyz[1][0] = thresholding(rawxyz[0], 128);
-		xyz[1][1] = thresholding(rawxyz[1], 128);
-		xyz[1][2] = thresholding(rawxyz[2], 128);
-		if ((xyz[0][0] ^ xyz[1][0]) || (xyz[0][1] ^ xyz[1][1])) {
-			gesture_state = 3;
-		}
-		else {
-			gesture_state = 0;
-		}
-		break;
-	case 2:
-		interrupts = adxl.getInterruptSource();
-		if (adxl.triggered(interrupts, ADXL345_DOUBLE_TAP) && ((millis() - timestamp) < 2500)) {
-			Serial.println("Double tap twice");
-			gesture_state = 0;
-			double_tap_counter = 0;
-			sprintf(buffer, "Testing");
-			Serial.println(buffer);
-			Serial.println();
-			oled.clearScreen();
-			oled.drawString(buffer, 0, 0, 2, COLOR_WHITE);
-			delay(1000);
-			oled.clearScreen();
-			mode = TESTING_MODE;
-		}
-		else if ((millis() - timestamp) >= 2050) {
-			Serial.println("Double tap once");
-			gesture_state = 0;
-			double_tap_counter = 0;
-			sprintf(buffer, ":(");
-			Serial.println(buffer);
-			Serial.println();
-			oled.clearScreen();
-			oled.drawString(buffer, 0, 0, 2, COLOR_WHITE);
-			delay(1000);
-			oled.clearScreen();
-			Serial.println(decision);
-			if (decision >= 0 && decision < 6)
-				updatePatternScore(emotion_types[decision], false);
-		}
-		break;
-	case 3:
-		shake_counter = 0;
-		while (shake_counter < 3 && millis() - timestamp < 1500) {
-			//Serial.println(shake_counter);
-			adxl.getAcceleration(rawxyz);
-			xyz[0][0] = thresholding(rawxyz[0], 128);
-			xyz[0][1] = thresholding(rawxyz[1], 128);
-			xyz[0][2] = thresholding(rawxyz[2], 128);
-			delay(100);
-			adxl.getAcceleration(rawxyz);
-			xyz[1][0] = thresholding(rawxyz[0], 128);
-			xyz[1][1] = thresholding(rawxyz[1], 128);
-			xyz[1][2] = thresholding(rawxyz[2], 128);
-			delay(100);
-			if ((xyz[0][0] ^ xyz[1][0]) || (xyz[0][1] ^ xyz[1][1])) {
-				shake_counter += 1;
-			}
-		}
-		if (shake_counter >= 3) {
-			if (decision >= 0 && decision < 6)
-				replay = true;
-			Serial.println("Shaking");
-		}
-		gesture_state = 0;
-		shake_counter = 0;
-		break;
-	}
-
-	delay(500);
-}
-
-int thresholding(double input, double threshold) {
-	if (input > threshold) {
-		return 1;
-	}
-	else {
-		return 0;
-	}
-}
-
-void testingMode() {
-	ssize_t size = spp.read();
-
-	if (size != -1) {
-		adxl.setInterrupt(ADXL345_INT_SINGLE_TAP_BIT, 0);
-		adxl.setInterrupt(ADXL345_INT_DOUBLE_TAP_BIT, 0);
-		const char* buf = spp.getBuf();
-		Serial.println(buf);
-		parsePattern(buf, "");
-		delay(4000);
-
-		adxl.setInterrupt(ADXL345_INT_SINGLE_TAP_BIT, 1);
-		adxl.setInterrupt(ADXL345_INT_DOUBLE_TAP_BIT, 1);
-	}
-
-	gestureStateMachineInTestingMode();
-}
-
-void gestureStateMachineInTestingMode() {
-	switch (gesture_state) {
-	case 0:
-		interrupts = adxl.getInterruptSource();
-		if (adxl.triggered(interrupts, ADXL345_DOUBLE_TAP)) {
-			double_tap_counter += 1;
-			timestamp = millis();
-			gesture_state = 1;
-		}
-		else if (adxl.triggered(interrupts, ADXL345_SINGLE_TAP)) {
-			Serial.println("Single tap");
-			gesture_state = 0;
-			//const char* str = "1";
-			//spp.write(str);
-			//sprintf(buffer, ":)");
-			//Serial.println(buffer);
-			//Serial.println();
-			//oled.clearScreen();
-			//oled.drawString(buffer, 0, 0, 2, COLOR_WHITE);
-			//delay(1000);
-			//oled.clearScreen();
-		}
-		break;
-	case 1:
-		interrupts = adxl.getInterruptSource();
-		if (adxl.triggered(interrupts, ADXL345_DOUBLE_TAP) && ((millis() - timestamp) < 2000)) {
-			Serial.println("Double tap twice");
-			gesture_state = 0;
-			double_tap_counter = 0;
-			sprintf(buffer, "Standard");
-			Serial.println(buffer);
-			Serial.println();
-			oled.clearScreen();
-			oled.drawString(buffer, 0, 0, 2, COLOR_WHITE);
-			delay(1000);
-			oled.clearScreen();
-			refreshAllPatternsFromCloud();
-			mode = STANDARD_MODE;
-		}
-		else if ((millis() - timestamp) >= 2000) {
-			Serial.println("Double tap once");
-			gesture_state = 0;
-			double_tap_counter = 0;
-			//const char* str = "0";
-			//spp.write(str);
-			//sprintf(buffer, ":(");
-			//Serial.println(buffer);
-			//Serial.println();
-			//oled.clearScreen();
-			//oled.drawString(buffer, 0, 0, 2, COLOR_WHITE);
-			//delay(1000);
-			//oled.clearScreen();
-		}
-		break;
-	}
-
-	// wait a bit
-	delay(500);
-}
-
 void parseDecision(int decision) {
 	Serial.print("Decision received: "); Serial.println(emotion_types[decision]);
 	Pattern vibrationPattern = parseResponse(responses.at((decision * 2 + 0)).c_str());
@@ -459,7 +471,7 @@ void parsePattern(const char* patternString, const char* emotion) {
 			drv.setMode(DRV2605_MODE_INTTRIG);
 			drv.playLibraryEffects(effects);
 			break;
-		case 2:			
+		case 2:
 			shortVibrationPulse();
 			delay(1000);
 			drv.setMode(DRV2605_MODE_REALTIME);
