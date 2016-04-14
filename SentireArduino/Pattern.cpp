@@ -1,7 +1,5 @@
 #include "Pattern.h"
 
-
-
 Pattern::Pattern()
 {
 }
@@ -50,7 +48,6 @@ void Pattern::setType(const char* type) {
 const char* Pattern::getType() {
 	return _type;
 }
-
 
 void Pattern::setValue(const char* value) {
 	_value = value;

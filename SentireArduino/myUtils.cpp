@@ -17,7 +17,6 @@ std::vector<std::string> splitString(std::string s, std::string delimiter) {
 	return splitted_strings;
 }
 
-
 std::vector<int> extractEffects(std::string s) {
 	std::vector<int> effects;
 	std::stringstream ss(s);

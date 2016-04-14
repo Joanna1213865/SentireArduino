@@ -19,7 +19,6 @@ public:
 	void setScore(int score);
 	int getScore(void);
 
-
 private:
 	const char* _id;
 	const char* _name;
@@ -28,4 +27,3 @@ private:
 	const char* _value;
 	int _score;
 };
-
