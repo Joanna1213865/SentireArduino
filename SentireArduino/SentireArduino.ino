@@ -1,10 +1,10 @@
 /*
  Name:		SentireArduino.ino
  Created:	4/9/2016 2:03:30 AM
- Author:	songer
+ Author:	Qisong Wang
 */
 
-// the setup function runs once when you press reset or power the board
+// Libraries used
 #include <SD.h>
 #include <WiFiClient.h>
 #include <SPI.h>
@@ -19,52 +19,66 @@
 #include "myUtils.h"
 #include "Pattern.h"
 
-#define STANDARD_MODE 1
-#define TESTING_MODE 2
+// Symbolic mode names
+#define STANDARD_MODE	1
+#define TESTING_MODE	2
 
+// Maxmum length of JSON response
 #define RESPONSE_JSON_DATA_LINENNO 10
 
-#define cs     10
-#define dc     12
-#define mosi   11
-#define sclk   13
+// OLED Pin Name    // Pin Name on Xadow-Accelerometer
+#define cs     10   // MISO
+#define dc     12   // A5
+#define mosi   11   // MOSI
+#define sclk   13   // SCK
 
-Adafruit_DRV2605 drv;
-SSD1331 oled = SSD1331(cs, dc);
-Intel_Edison_BT_SPP spp;
-ADXL345 adxl;
-WiFiClient client;
+// Declaration of device objects
+SSD1331 oled = SSD1331(cs, dc); // Colour OLED display using dedicated hardware SPI
+Adafruit_DRV2605 drv;			// Haptic motor drivr
+Intel_Edison_BT_SPP spp;		// Bluetooth SPP library
+ADXL345 adxl;					// Accelerometer
+WiFiClient client;				// Wifi client
+File offlineFile;				// Offline file pointer
 
-File offlineFile;
-
-//char ssid[] = "songer1993"; //  your network SSID (name)
-//char pass[] = "150151325wqs";    // your net ork password (use for WPA, or use as key for WEP)
-char ssid[] = "VM236337-2G"; //  your network SSID (name)
-char pass[] = "jedrtdsf";    // your net ork password (use for WPA, or use as key for WEP)
+// Wifi connection details
+//char ssid[] = "VM236337-2G"; //  your network SSID (name)
+//char pass[] = "jedrtdsf";    // your net ork password (use for WPA, or use as key for WEP)
+char ssid[] = "songer1993"; //  your network SSID (name)
+char pass[] = "150151325wqs";    // your net ork password (use for WPA, or use as key for WEP)
 int keyIndex = 0;            // your network key Index number (needed only for WEP)
 int status = WL_IDLE_STATUS;
 
+// Microsoft Azure cloud database related details
 const char* server = "songerarduinotest.azure-mobile.net";
 const char* ams_key = "IBmOdZkslBSsjrCkJeQNvpjHOpTQYr42";
+//const char* server = "sentire.azure-mobile.net";
+//const char* ams_key = "mYwbeuzHpCbzQXEuRDMJKrGrronplS68";
 const char* table_names[2] = { "vibrationpattern", "lightpattern" };
 const char* emotion_types[6] = { "happy", "fearful", "surprised", "sad", "disgusted", "angry" };
-char* offline_file_name = "offline_patterns.txt";
-int decision = -1;
-char buffer[2048];
 
+// Offline file name
+char* offline_file_name = "offline_patterns.txt";
+
+// State, flag and counter variables
 int mode = STANDARD_MODE;
-int double_tap_counter = 0;
-unsigned long timestamp;
+int gesture_state = 0;
 bool connection_failure = false;
 bool replay = false;
-std::vector<String> responses;
+int double_tap_counter = 0;
+int shake_counter = 0;
 
-int gesture_state = 0;
+// Runtime data holder
+std::vector<String> responses; // contains full pattern information in runtime
+
+// Temporary data variables
+int decision = -1; // decision signal received last time, 0-happy, 1-fearful, 2-surprised, 3-s
+char buffer[2048];
+unsigned long timestamp;
 byte interrupts;
 double rawxyz[3];
 int xyz[2][3];
-int shake_counter = 0;
 
+// Setup at the begining of the program
 void setup() {
 	// Initialise serial port and oled and display starting page
 	oled.init();
@@ -84,7 +98,10 @@ void setup() {
 
 	//connectWifi();
 
+	// Load local patterns to runtime data holder
 	refreshAllPatternsFromLocalStore();
+
+	// Finish setup
 	Serial.println("Setup Done!");
 	shortVibrationPulse();
 	oled.clearScreen();
@@ -95,6 +112,7 @@ void loop() {
 	stateMachine();
 }
 
+// Main statemachine contains two modes
 void stateMachine() {
 	switch (mode) {
 	case STANDARD_MODE:
@@ -106,10 +124,16 @@ void stateMachine() {
 	}
 }
 
+// Standard working mode
 void standardMode() {
+	// Read bluetooth spp
 	ssize_t size = spp.read();
 
+	// If there is a valid message, i.e., a single number 0-5,
+	// display the corresponding vibration and light patterns
+	// Or if replay request is detected, replay the last pair of patterns
 	if (((size != -1) && (size != 0)) || replay) {
+		// Disable tapping detection during vibraton
 		adxl.setInterrupt(ADXL345_INT_SINGLE_TAP_BIT, 0);
 		adxl.setInterrupt(ADXL345_INT_DOUBLE_TAP_BIT, 0);
 		if (!replay) {
@@ -127,6 +151,7 @@ void standardMode() {
 			replay = false;
 		}
 
+		// Enbale tapping detection agian
 		adxl.setInterrupt(ADXL345_INT_SINGLE_TAP_BIT, 1);
 		adxl.setInterrupt(ADXL345_INT_DOUBLE_TAP_BIT, 1);
 	}
@@ -134,6 +159,11 @@ void standardMode() {
 	gestureStateMachineInStandardMode();
 }
 
+// State machine used to detect several actions
+// One single tap: Update the most recent patterns' scroe with positive feedback
+// One double tap: Update the most recent patterns' scroe with negative feedback
+// Two double taps: Switch mode to Testing mode
+// High speed shaking: Replay the most recent patterns
 void gestureStateMachineInStandardMode() {
 	Serial.print("Gesture state: "); Serial.println(gesture_state);
 
@@ -230,6 +260,8 @@ void gestureStateMachineInStandardMode() {
 		}
 		break;
 	case 3:
+		adxl.setInterrupt(ADXL345_INT_SINGLE_TAP_BIT, 0);
+		adxl.setInterrupt(ADXL345_INT_DOUBLE_TAP_BIT, 0);
 		shake_counter = 0;
 		while (shake_counter < 3 && millis() - timestamp < 1500) {
 			//Serial.println(shake_counter);
@@ -254,12 +286,15 @@ void gestureStateMachineInStandardMode() {
 		}
 		gesture_state = 0;
 		shake_counter = 0;
+		adxl.setInterrupt(ADXL345_INT_SINGLE_TAP_BIT, 1);
+		adxl.setInterrupt(ADXL345_INT_DOUBLE_TAP_BIT, 1);
 		break;
 	}
 
 	delay(500);
 }
 
+// A helpler function for simplifying accelerometer data further to 0 or 1
 int thresholding(double input, double threshold) {
 	if (input > threshold) {
 		return 1;
@@ -269,9 +304,12 @@ int thresholding(double input, double threshold) {
 	}
 }
 
+// Testing mode
 void testingMode() {
+	// Read Bluetooth SPP
 	ssize_t size = spp.read();
 
+	// If there is a valid pattern value string, parse and play it
 	if ((size != -1) && (size != 0)) {
 		adxl.setInterrupt(ADXL345_INT_SINGLE_TAP_BIT, 0);
 		adxl.setInterrupt(ADXL345_INT_DOUBLE_TAP_BIT, 0);
@@ -287,6 +325,10 @@ void testingMode() {
 	gestureStateMachineInTestingMode();
 }
 
+// State machine used to detect several actions
+// One single tap: Temporarily no corresponding action
+// One double tap: Temporarily no corresponding action
+// Two double taps: Switch back to Standard Mode and try to update patterns
 void gestureStateMachineInTestingMode() {
 	switch (gesture_state) {
 	case 0:
@@ -347,6 +389,7 @@ void gestureStateMachineInTestingMode() {
 	delay(500);
 }
 
+// Load local pattern data to runtime
 void refreshAllPatternsFromLocalStore() {
 	Serial.print("Initializing SD card...");
 
@@ -376,6 +419,7 @@ void refreshAllPatternsFromLocalStore() {
 	offlineFile.close();
 }
 
+// Update local and runtime pattern data from Cloud
 void refreshAllPatternsFromCloud() {
 	connection_failure = false;
 	responses.clear();
@@ -416,6 +460,56 @@ void refreshAllPatternsFromCloud() {
 	}
 }
 
+// Try to connect wifi
+void connectWifi() {
+	sprintf(buffer, "Connecting Wifi");
+	Serial.println();
+	oled.clearScreen();
+	oled.drawString(buffer, 0, 0, 2, COLOR_WHITE);
+	// Check for the presence of the shield:
+	if (WiFi.status() == WL_NO_SHIELD) {
+		Serial.println("WiFi shield not present");
+		// don't continue:
+		while (true);
+	}
+
+	// Check firmaware version
+	String fv = WiFi.firmwareVersion();
+	if (fv != "1.1.0")
+		Serial.println("Please upgrade the firmware");
+
+	timestamp = millis();
+	// Attempt to connect to Wifi network:
+	while ((status != WL_CONNECTED) && ((millis() - timestamp) < 30000)) {
+		sprintf(buffer, "Attempting to conncect to SSID: %s", ssid);
+		Serial.println(buffer);
+		oled.drawString(buffer, 0, 32, 1, COLOR_WHITE);
+		// Connect to WPA/WPA2 network. Change this line if using open or WEP network:
+		status = WiFi.begin(ssid, pass);
+	}
+
+	// Confirm connected
+	if (status == WL_CONNECTED) {
+		sprintf(buffer, "Wifi Connected");
+		Serial.println(buffer);
+		oled.clearScreen();
+		oled.drawString(buffer, 0, 0, 2, COLOR_WHITE);
+		delay(1000);
+		oled.clearScreen();
+	}
+	else {
+		connection_failure = true;
+		sprintf(buffer, "Wifi Not Connected");
+		Serial.println(buffer);
+		oled.clearScreen();
+		oled.drawString(buffer, 0, 0, 2, COLOR_WHITE);
+		delay(1000);
+		oled.clearScreen();
+		return;
+	}
+}
+
+// Update the local pattern data by overwritting it
 void refreshLocalStore() {
 	Serial.print("Initializing SD card...");
 
@@ -446,6 +540,7 @@ void refreshLocalStore() {
 	offlineFile.close();
 }
 
+// Play vibration and light patterns based on the decision received
 void parseDecision(int decision) {
 	Serial.print("Decision received: "); Serial.println(emotion_types[decision]);
 	Pattern vibrationPattern = parseResponse(responses.at((decision * 2 + 0)).c_str());
@@ -454,6 +549,8 @@ void parseDecision(int decision) {
 	parsePattern(lightPattern.getValue(), lightPattern.getEmotion());
 }
 
+// Determine which type of pattern is going to be played,
+// and use relevant helpler function
 void parsePattern(const char* patternString, const char* emotion) {
 	std::string Str(patternString);
 	std::vector<std::string> splitted_strings;
@@ -487,6 +584,7 @@ void parsePattern(const char* patternString, const char* emotion) {
 	}
 }
 
+// Parse the response in JSON format and convert it to a Pattern object
 Pattern parseResponse(const char* response)
 {
 	sprintf(buffer, response);
@@ -507,53 +605,10 @@ Pattern parseResponse(const char* response)
 	int score = root["score"];
 
 	return Pattern(id, name, emotion, type, value, score);
-	//parsePattern(value, emotion);
 }
 
-void connectWifi() {
-	sprintf(buffer, "Connecting Wifi");
-	Serial.println();
-	oled.clearScreen();
-	oled.drawString(buffer, 0, 0, 2, COLOR_WHITE);
-	// check for the presence of the shield:
-	if (WiFi.status() == WL_NO_SHIELD) {
-		Serial.println("WiFi shield not present");
-		// don't continue:
-		while (true);
-	}
-
-	String fv = WiFi.firmwareVersion();
-	if (fv != "1.1.0")
-		Serial.println("Please upgrade the firmware");
-
-	timestamp = millis();
-	// attempt to connect to Wifi network:
-	while ((status != WL_CONNECTED) && ((millis() - timestamp) < 30000)) {
-		sprintf(buffer, "Attempting to conncect to SSID: %s", ssid);
-		Serial.println(buffer);
-		oled.drawString(buffer, 0, 32, 1, COLOR_WHITE);
-		// Connect to WPA/WPA2 network. Change this line if using open or WEP network:
-		status = WiFi.begin(ssid, pass);
-	}
-	if (status == WL_CONNECTED) {
-		sprintf(buffer, "Wifi Connected");
-		Serial.println(buffer);
-		oled.clearScreen();
-		oled.drawString(buffer, 0, 0, 2, COLOR_WHITE);
-		delay(1000);
-		oled.clearScreen();
-	}
-	else {
-		sprintf(buffer, "Wifi Not Connected");
-		Serial.println(buffer);
-		oled.clearScreen();
-		oled.drawString(buffer, 0, 0, 2, COLOR_WHITE);
-		delay(1000);
-		oled.clearScreen();
-		return;
-	}
-}
-
+// Update a pattern's score by first downloading the newest version of it.
+// then add or decrease its latest score by sending update request
 void updatePatternScore(const char* emotion, bool positive_feedback)
 {
 	connection_failure = false;
@@ -561,19 +616,25 @@ void updatePatternScore(const char* emotion, bool positive_feedback)
 		connectWifi();
 	}
 	if (status == WL_CONNECTED) {
+		// Loop to update both vibration and light patterns' scores
 		for (int i = 0; i < 2; i++) {
+			// Download the latest information of the target pattern
 			sendQueryRequest(server, ams_key, table_names[i], emotion);
 			waitResponse();
 			String response = readQueryResponse();
 			endRequest();
 			Pattern patternToBeRated = parseResponse(response.c_str());
+
+			// Process its score according to the feedback
 			int newScore;
 			if (positive_feedback) {
 				newScore = patternToBeRated.getScore() + 1;
 			}
 			else {
-				newScore = patternToBeRated.getScore() + 1;
+				newScore = patternToBeRated.getScore() - 1;
 			}
+
+			// Update the pattern in the cloud
 			sendUpdateRequest(server, ams_key, table_names[i], patternToBeRated.getId(), newScore);
 			waitResponse();
 			readUpdateResponse();
@@ -582,6 +643,7 @@ void updatePatternScore(const char* emotion, bool positive_feedback)
 	}
 }
 
+// Download a single pattern from Cloud
 void refreshPatternFromCloud(const char* server, const char* ams_key, const char* table_name, const char* emotion)
 {
 	sendQueryRequest(server, ams_key, table_name, emotion);
@@ -590,13 +652,14 @@ void refreshPatternFromCloud(const char* server, const char* ams_key, const char
 	endRequest();
 }
 
+// Send query request to Cloud
 void sendQueryRequest(const char* server, const char* ams_key, const char* table_name, const char* emotion)
 {
 	Serial.println("\nconnecting...");
 
 	if (client.connect(server, 80))
 	{
-		///*
+		// Start query request
 		sprintf(buffer, "GET /tables/%s?$filter=startswith(emotion,'%s')&$orderby=score+desc&$top=1 HTTP/1.1", table_name, emotion);
 
 		client.println(buffer);
@@ -641,18 +704,7 @@ void sendQueryRequest(const char* server, const char* ams_key, const char* table
 	}
 }
 
-void waitResponse()
-{
-	while (!client.available())
-	{
-		if (!client.connected())
-		{
-			connection_failure = true;
-			return;
-		}
-	}
-}
-
+// Send a request to update one pattern with a new score
 void sendUpdateRequest(const char* server, const char* ams_key, const char* table_name, const char* Id, int newScore)
 {
 	String strId(Id);
@@ -703,6 +755,20 @@ void sendUpdateRequest(const char* server, const char* ams_key, const char* tabl
 	}
 }
 
+// Wait for a response from Cloud
+void waitResponse()
+{
+	while (!client.available())
+	{
+		if (!client.connected())
+		{
+			connection_failure = true;
+			return;
+		}
+	}
+}
+
+// Recive the query response and add save it in runtime
 String readQueryResponse()
 {
 	boolean bodyStarted;
@@ -737,6 +803,7 @@ String readQueryResponse()
 	return response;
 }
 
+// Receive the update response, no other actions.
 void readUpdateResponse()
 {
 	boolean bodyStarted;
@@ -768,11 +835,13 @@ void readUpdateResponse()
 	Serial.println("");
 }
 
+// End request
 void endRequest()
 {
 	client.stop();
 }
 
+// A short vibraion pulse prior to the patterns to alert the user
 void shortVibrationPulse() {
 	drv.setMode(DRV2605_MODE_INTTRIG);
 	drv.setWaveform(1, 1);  // strong click 100%, see datasheet part 11.2
