@@ -43,21 +43,24 @@ File offlineFile;				// Offline file pointer
 // Wifi connection details
 //char ssid[] = "VM236337-2G"; //  your network SSID (name)
 //char pass[] = "jedrtdsf";    // your net ork password (use for WPA, or use as key for WEP)
-char ssid[] = "songer1993"; //  your network SSID (name)
-char pass[] = "150151325wqs";    // your net ork password (use for WPA, or use as key for WEP)
+//char* ssid = "songer1993"; //  your network SSID (name)
+//char* pass = "150151325wqs";    // your net ork password (use for WPA, or use as key for WEP)
+String ssid;
+String pass;
 int keyIndex = 0;            // your network key Index number (needed only for WEP)
 int status = WL_IDLE_STATUS;
 
 // Microsoft Azure cloud database related details
-const char* server = "songerarduinotest.azure-mobile.net";
-const char* ams_key = "IBmOdZkslBSsjrCkJeQNvpjHOpTQYr42";
-//const char* server = "sentire.azure-mobile.net";
-//const char* ams_key = "mYwbeuzHpCbzQXEuRDMJKrGrronplS68";
+//const char* server = "songerarduinotest.azure-mobile.net";
+//const char* ams_key = "IBmOdZkslBSsjrCkJeQNvpjHOpTQYr42";
+const char* server = "sentire.azure-mobile.net";
+const char* ams_key = "mYwbeuzHpCbzQXEuRDMJKrGrronplS68";
 const char* table_names[2] = { "vibrationpattern", "lightpattern" };
 const char* emotion_types[6] = { "happy", "fearful", "surprised", "sad", "disgusted", "angry" };
 
 // Offline file name
 char* offline_file_name = "offline_patterns.txt";
+char* wifi_file_name = "wifi.txt";
 
 // State, flag and counter variables
 int mode = STANDARD_MODE;
@@ -71,7 +74,7 @@ int shake_counter = 0;
 std::vector<String> responses; // contains full pattern information in runtime
 
 // Temporary data variables
-int decision = -1; // decision signal received last time, 0-happy, 1-fearful, 2-surprised, 3-s
+int decision = -1; // decision signal received last time, 0-happy, 1-fearful, 2-surprised, 3-sad, 4-disgusted, 5-angry
 char buffer[2048];
 unsigned long timestamp;
 byte interrupts;
@@ -100,10 +103,13 @@ void setup() {
 
 	// Load local patterns to runtime data holder
 	refreshAllPatternsFromLocalStore();
-
+	initialiseWifiCredential();
+	Serial.println(ssid.c_str());
+	Serial.println(pass.c_str());
 	// Finish setup
 	Serial.println("Setup Done!");
 	shortVibrationPulse();
+	delay(2000);
 	oled.clearScreen();
 }
 
@@ -178,6 +184,8 @@ void gestureStateMachineInStandardMode() {
 			double_tap_counter += 1;
 			timestamp = millis();
 			gesture_state = 2;
+			adxl.setInterrupt(ADXL345_INT_SINGLE_TAP_BIT, 0);
+			adxl.setInterrupt(ADXL345_INT_DOUBLE_TAP_BIT, 0);
 		}
 		else if (adxl.triggered(interrupts, ADXL345_SINGLE_TAP)) {
 			gesture_state = 0;
@@ -211,6 +219,8 @@ void gestureStateMachineInStandardMode() {
 			double_tap_counter += 1;
 			timestamp = millis();
 			gesture_state = 2;
+			adxl.setInterrupt(ADXL345_INT_SINGLE_TAP_BIT, 0);
+			adxl.setInterrupt(ADXL345_INT_DOUBLE_TAP_BIT, 0);
 		}
 		else if (adxl.triggered(interrupts, ADXL345_SINGLE_TAP)) {
 			gesture_state = 0;
@@ -230,8 +240,10 @@ void gestureStateMachineInStandardMode() {
 		}
 		break;
 	case 2:
+		adxl.setInterrupt(ADXL345_INT_SINGLE_TAP_BIT, 1);
+		adxl.setInterrupt(ADXL345_INT_DOUBLE_TAP_BIT, 1);
 		interrupts = adxl.getInterruptSource();
-		if (adxl.triggered(interrupts, ADXL345_DOUBLE_TAP) && ((millis() - timestamp) < 2500)) {
+		if (adxl.triggered(interrupts, ADXL345_DOUBLE_TAP) && ((millis() - timestamp) < 2000)) {
 			Serial.println("Double tap twice");
 			gesture_state = 0;
 			double_tap_counter = 0;
@@ -244,7 +256,7 @@ void gestureStateMachineInStandardMode() {
 			oled.clearScreen();
 			mode = TESTING_MODE;
 		}
-		else if ((millis() - timestamp) >= 2050) {
+		else if (!(adxl.triggered(interrupts, ADXL345_DOUBLE_TAP)) && ((millis() - timestamp) >= 2000)) {
 			Serial.println("Double tap once");
 			gesture_state = 0;
 			double_tap_counter = 0;
@@ -389,6 +401,66 @@ void gestureStateMachineInTestingMode() {
 	delay(500);
 }
 
+// Load local wifi credential to runtime
+void initialiseWifiCredential() {
+	Serial.print("Initializing SD card...");
+
+	if (!SD.begin(4)) {
+		Serial.println("initialization failed!");
+		return;
+	}
+	Serial.println("initialization done.");
+
+	if (SD.exists(wifi_file_name)) {
+		Serial.print(wifi_file_name);
+		Serial.println(" exists.");
+	}
+	else {
+		Serial.print(wifi_file_name);
+		Serial.println(" doesn't exist.");
+		return;
+	}
+
+	// open a new file and immediately close it:
+	offlineFile = SD.open(wifi_file_name, FILE_READ);
+	ssid = offlineFile.readStringUntil(',');
+	pass = offlineFile.readStringUntil('\n');
+	offlineFile.close();
+}
+
+// Update the local wifi credential by overwritting it
+void refreshLocalWifiCredential() {
+	Serial.print("Initializing SD card...");
+
+	if (!SD.begin(4)) {
+		Serial.println("initialization failed!");
+		return;
+	}
+	Serial.println("initialization done.");
+
+	if (SD.exists(wifi_file_name)) {
+		Serial.print(wifi_file_name);
+		Serial.println(" exists.");
+		SD.remove(wifi_file_name);
+		Serial.print(wifi_file_name);
+		Serial.println(" removed.");
+	}
+	else {
+		Serial.print(wifi_file_name);
+		Serial.println(" doesn't exist.");
+	}
+
+	// open a new file and immediately close it:
+	Serial.print("Creating ");
+	Serial.print(wifi_file_name);
+	Serial.println("...");
+	offlineFile = SD.open(wifi_file_name, FILE_WRITE);
+	offlineFile.print(ssid);
+	offlineFile.print(',');
+	offlineFile.print(pass);
+	offlineFile.close();
+}
+
 // Load local pattern data to runtime
 void refreshAllPatternsFromLocalStore() {
 	Serial.print("Initializing SD card...");
@@ -480,12 +552,12 @@ void connectWifi() {
 
 	timestamp = millis();
 	// Attempt to connect to Wifi network:
-	while ((status != WL_CONNECTED) && ((millis() - timestamp) < 30000)) {
-		sprintf(buffer, "Attempting to conncect to SSID: %s", ssid);
+	while ((status != WL_CONNECTED) && ((millis() - timestamp) < 40000)) {
+		sprintf(buffer, "Attempting to conncect to SSID: %s", ssid.c_str());
 		Serial.println(buffer);
 		oled.drawString(buffer, 0, 32, 1, COLOR_WHITE);
 		// Connect to WPA/WPA2 network. Change this line if using open or WEP network:
-		status = WiFi.begin(ssid, pass);
+		status = WiFi.begin(&ssid[0u], &pass[0u]);
 	}
 
 	// Confirm connected
@@ -532,7 +604,9 @@ void refreshLocalStore() {
 	}
 
 	// open a new file and immediately close it:
-	Serial.println("Creating example.txt...");
+	Serial.print("Creating ");
+	Serial.print(offline_file_name);
+	Serial.println("...");
 	offlineFile = SD.open(offline_file_name, FILE_WRITE);
 	for (int i = 0; i < 12; i++) {
 		offlineFile.println(responses.at(i).c_str());
@@ -579,6 +653,17 @@ void parsePattern(const char* patternString, const char* emotion) {
 			oled.clearScreen();
 			Serial.print("Number of effects: ");  Serial.println((effects.size() / 4));
 			oled.playSequencedColors(effects, emotion);
+			break;
+		case 4:
+			std::vector<std::string> wifi_confidential;
+			wifi_confidential = splitString(splitted_strings[1], ",");
+			const char* ssid_c = wifi_confidential[0].c_str();
+			const char* pass_c = wifi_confidential[1].c_str();
+			ssid = ssid_c;
+			pass = pass_c;
+			ssid.trim();
+			pass.trim();
+			refreshLocalWifiCredential();
 			break;
 		}
 	}
