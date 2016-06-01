@@ -41,10 +41,6 @@ WiFiClient client;				// Wifi client
 File offlineFile;				// Offline file pointer
 
 // Wifi connection details
-//char ssid[] = "VM236337-2G"; //  your network SSID (name)
-//char pass[] = "jedrtdsf";    // your net ork password (use for WPA, or use as key for WEP)
-//char* ssid = "songer1993"; //  your network SSID (name)
-//char* pass = "150151325wqs";    // your net ork password (use for WPA, or use as key for WEP)
 String ssid;
 String pass;
 int keyIndex = 0;            // your network key Index number (needed only for WEP)
