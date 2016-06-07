@@ -2,7 +2,8 @@
  Name:		SentireArduino.ino
  Created:	4/9/2016 2:03:30 AM
  Author:	Qisong Wang
-*/
+ Modified:  7/6/2016
+ */
 
 // Libraries used
 #include <SD.h>

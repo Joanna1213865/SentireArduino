@@ -13,7 +13,7 @@
 #define __BIN_I686__
 #define _VMDEBUG 1
 #define __ARDUINO_X86__
-#define ARDUINO 10607
+#define ARDUINO 10609
 #define __cplusplus 201103L
 #define __inline__
 #define __asm__(x)
@@ -98,9 +98,9 @@ extern "C" void __cxa_pure_virtual() {;}
 #define portOutputRegister(P)
 #define portInputRegister(P)
 #define portModeRegister(P)
-#include <..\SentireArduino\SentireArduino.ino>
-#include <..\SentireArduino\Pattern.cpp>
-#include <..\SentireArduino\Pattern.h>
-#include <..\SentireArduino\myUtils.cpp>
-#include <..\SentireArduino\myUtils.h>
+#include <SentireArduino.ino>
+#include <Pattern.cpp>
+#include <Pattern.h>
+#include <myUtils.cpp>
+#include <myUtils.h>
 #endif
